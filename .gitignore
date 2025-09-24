@@ -1,3 +1,5 @@
 .idea/
 script
 jars/
+spark/jars/
+airflow/logs/

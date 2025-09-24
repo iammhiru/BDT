@@ -19,7 +19,7 @@ def main():
     print(">>> Data gốc:")
     df.show()
 
-    csv_path = "s3a://my-bucket/rawdata/people_csv1/"
+    csv_path = "s3a://my-bucket/rawdata/people_csv2/"
     df.write.mode("overwrite").option("header", "true").csv(csv_path)
     print(f">>> Đã ghi CSV vào MinIO tại {csv_path}")
 
@@ -27,7 +27,7 @@ def main():
     print(">>> Data đọc lại từ MinIO (CSV):")
     df_csv.show()
 
-    parquet_path = "s3a://my-bucket/parquetdata/people_parquet1/"
+    parquet_path = "s3a://my-bucket/parquetdata/people_parquet2/"
     df_csv.write.mode("overwrite").parquet(parquet_path)
     print(f">>> Đã ghi Parquet vào MinIO tại {parquet_path}")
 

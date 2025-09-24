@@ -1,6 +1,77 @@
 version: '3.8'
 
+x-airflow-common:
+  &airflow-common
+  image: airflow:3.2
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./jobs:/opt/spark/jobs
+    - ./jars:/opt/extra-jars
+
+  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}"
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+  networks:
+    - lakehouse  
+
 services:
+  airflow-postgres:
+    image: postgres:14
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+    networks:
+      - lakehouse
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    command: version
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    ports:
+      - 8282:8080   # UI: http://localhost:8282
+    restart: always
+    command: webserver
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    restart: always
+    command: scheduler
+
   spark-iceberg:
     image: tabulario/spark-iceberg:latest
     container_name: spark-iceberg
@@ -142,3 +213,4 @@ networks:
 volumes:
   minio_data:
   metastore_db:
+  airflow_postgres_data:
