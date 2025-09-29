@@ -1,0 +1,155 @@
+seed: "browsing-2025"
+
+date_range:
+  start: "2025-05-01"
+  end:   "2025-05-07"
+
+paths:
+  keys_csv: "data/keys/seed_keys_clean.csv"
+  tickets_dir: null
+  out_dir: "data/raw/browsing"
+  upload_to_minio: false
+
+volume:
+  sessions_per_1k_services: 1840
+  weekday_multiplier: [1.10, 1.15, 1.15, 1.10, 1.05, 0.90, 0.85]
+  events_per_session_mean: 8.0    
+  start_hour_weights:
+    "0": 0.010
+    "1": 0.008
+    "2": 0.007
+    "3": 0.007
+    "4": 0.008
+    "5": 0.015
+    "6": 0.025
+    "7": 0.040
+    "8": 0.055
+    "9": 0.065
+    "10": 0.065
+    "11": 0.060
+    "12": 0.060
+    "13": 0.060
+    "14": 0.060
+    "15": 0.060
+    "16": 0.060
+    "17": 0.055
+    "18": 0.050
+    "19": 0.045
+    "20": 0.040
+    "21": 0.030
+    "22": 0.020
+    "23": 0.015
+  # Khoảng giãn giữa các event trong session (giây)
+  inter_event_seconds: [5, 120]   # uniform
+
+id_fields:
+  session_presence_rate: 0.92    # tỉ lệ có session_id
+  duration_presence_rate: 0.97   # tỉ lệ có duration
+
+duration_model:
+  # thời lượng đọc (giây) ~ lognormal * heavy tail
+  lognorm: { mu: 4.2, sigma: 1.2 }   # lệch chuẩn cao
+  heavy_tail:
+    prob: 0.08
+    pareto_alpha: 1.6
+    pareto_scale: 2.0
+  clip_seconds: [1, 1800]            # 1s .. 30 phút
+
+topic_mix:
+  # tỉ lệ chọn “nhóm chủ đề”
+  weights:
+    general_web: 0.70
+    long_tail:   0.25
+    security_cam_family: 0.05   # camera/CCTV/doorbell/alarm… thiểu số
+  # mapping domain -> topic chi tiết cho 2 nhóm structured (general & security)
+  general_domains:
+    news:
+      weight: 0.12
+      topic: "news"
+      domains: ["vnexpress.net","tuoitre.vn","thanhnien.vn","bbc.com","cnn.com","nytimes.com","theguardian.com"]
+    entertainment:
+      weight: 0.12
+      topic: "entertainment"
+      domains: ["youtube.com","tiktok.com","zingmp3.vn","spotify.com","netflix.com","fptplay.vn","vieon.vn"]
+    social:
+      weight: 0.11
+      topic: "social"
+      domains: ["facebook.com","instagram.com","zalo.me","twitter.com","reddit.com","threads.net","linkedin.com"]
+    ecommerce:
+      weight: 0.11
+      topic: "shopping"
+      domains: ["shopee.vn","lazada.vn","tiki.vn","sendo.vn","amazon.com","ebay.com","aliexpress.com"]
+    work_tools:
+      weight: 0.09
+      topic: "productivity"
+      domains: ["docs.google.com","drive.google.com","mail.google.com","office.com","outlook.com","zoom.us","slack.com","notion.so"]
+    gaming:
+      weight: 0.07
+      topic: "gaming"
+      domains: ["store.steampowered.com","epicgames.com","playstation.com","xbox.com","garena.vn","roblox.com"]
+    education:
+      weight: 0.06
+      topic: "education"
+      domains: ["wikipedia.org","coursera.org","edx.org","khanacademy.org","hocmai.vn","vietjack.com"]
+    travel:
+      weight: 0.05
+      topic: "travel"
+      domains: ["agoda.com","booking.com","traveloka.com","airbnb.com","vietjetair.com","vietnamairlines.com"]
+    finance:
+      weight: 0.05
+      topic: "finance"
+      domains: ["vietcombank.com.vn","techcombank.com.vn","mbbank.com.vn","binance.com","coinmarketcap.com","cafef.vn"]
+    health:
+      weight: 0.04
+      topic: "health"
+      domains: ["who.int","cdc.gov","healthline.com","vinmec.com","bachmai.gov.vn","benhvien108.vn"]
+    parenting:
+      weight: 0.04
+      topic: "parenting"
+      domains: ["webtretho.com","babycenter.com","whattoexpect.com","parents.com"]
+    hobbies:
+      weight: 0.04
+      topic: "hobbies"
+      domains: ["cookpad.com","allrecipes.com","goodreads.com","rottentomatoes.com","imdb.com"]
+    tech:
+      weight: 0.10
+      topic: "tech"
+      domains: ["stackoverflow.com","github.com","viblo.asia","medium.com","tomshardware.com","theverge.com","gsmarena.com"]
+
+  security_domains:
+    camera:
+      weight: 0.40
+      topic: "camera"
+      domains: ["hikvision.com","dahua-technology.com","reolink.com","arlo.com","ezviz.com","kbvision.vn","imoulife.com"]
+    cctv:
+      weight: 0.25
+      topic: "CCTV"
+      domains: ["cctv.com","ipcamtalk.com","ipvm.com","securityinfowatch.com","cctvforum.com"]
+    doorbell:
+      weight: 0.15
+      topic: "doorbell"
+      domains: ["ring.com","nest.com","eufy.com","wyze.com"]
+    alarm:
+      weight: 0.12
+      topic: "alarm"
+      domains: ["simplisafe.com","adt.com","ajax.systems","boschsecurity.com"]
+    smart_home:
+      weight: 0.08
+      topic: "smart_home"
+      domains: ["home-assistant.io","iot.tuya.com","matter.build","philips-hue.com","ifttt.com"]
+
+long_tail:
+  tlds: [".com",".net",".org",".io",".app",".vn"]
+  words: ["alpha","nova","cloud","smart","tech","viet","plus","global","media","home","secure","fast","data","live","pro","zone","hub","space","world","daily","news","shop","care"]
+  topic: "other"
+
+correlation:
+  lookback_days: 7
+  boost_factor: 1.8
+  mapping_ticket_to_topic:
+    wifi_coverage: "tech"
+    speed_issue: "tech"
+    router_config: "tech"
+    camera: "camera"
+    security: "alarm"
+    POS: "shopping"

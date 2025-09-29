@@ -3,7 +3,7 @@ from pyspark.sql import SparkSession
 def main():
     spark = SparkSession.builder \
         .appName("SparkMinIO_CSV") \
-        .master("spark://spark-iceberg:7077") \
+        .master("spark://spark-master:7077") \
         .getOrCreate()
 
     data = [

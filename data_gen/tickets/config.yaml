@@ -1,0 +1,96 @@
+seed: "tickets-2025"
+
+date_range:
+  start: "2025-05-01"     # inclusive
+  end:   "2025-05-07"
+
+paths:
+  keys_csv: "data/keys/seed_keys_clean.csv"
+  profile_csv: "data/raw/service_profile/service_profile_raw.parquet"     # optional (để boost wifi_coverage khi thiết bị cũ)
+  subs_csv:    "data/raw/subscriptions/month=202505/subscriptions_raw.csv" # optional (để boost POS khi multi-site)
+  out_dir: "data/raw/tickets"
+  upload_to_minio: false
+
+volume:
+  # véctơ khối lượng: số ticket trung bình mỗi 1.000 service / ngày (Poisson)
+  base_per_1k_services: 35
+  weekday_multiplier:   # hệ số theo thứ (Mon=0 ... Sun=6)
+    [1.00, 1.05, 1.05, 1.00, 0.95, 0.85, 0.80]
+  # giờ cao điểm mở ticket (xác suất chọn giờ)
+  peak_hours_weights: { "0":0.01,"1":0.01,"2":0.01,"3":0.01,"4":0.01,"5":0.02,
+                        "6":0.03,"7":0.05,"8":0.08,"9":0.09,"10":0.08,"11":0.08,
+                        "12":0.07,"13":0.07,"14":0.07,"15":0.07,"16":0.07,
+                        "17":0.06,"18":0.05,"19":0.04,"20":0.03,"21":0.02,"22":0.02,"23":0.02 }
+
+topics:
+  # Phần lớn là vấn đề chung; nhóm camera/security/POS chỉ là THIỂU SỐ
+  catalog:
+    - { name: "billing",          weight: 0.22, site_visit_rate: 0.01, resolved_rate: 0.93,
+        sla_hours_lognorm: {mu: 1.3, sigma: 0.6},
+        keywords: ["hoá đơn","cước","truy_thu","khuyến_mãi","thanh_toán"],
+        descriptions: ["Thắc mắc về hoá đơn kỳ gần nhất","Sai lệch tiền cước","Hỏi về chương trình khuyến mãi & áp dụng"]
+      }
+    - { name: "speed_issue",      weight: 0.18, site_visit_rate: 0.10, resolved_rate: 0.88,
+        sla_hours_lognorm: {mu: 1.6, sigma: 0.7},
+        keywords: ["tốc_độ","buffer","chậm","ping","packet_loss"],
+        descriptions: ["Phản ánh tốc độ thấp hơn cam kết","Xem video bị giật - buffer","Ping tăng cao vào buổi tối"]
+      }
+    - { name: "router_config",    weight: 0.12, site_visit_rate: 0.06, resolved_rate: 0.91,
+        sla_hours_lognorm: {mu: 1.4, sigma: 0.6},
+        keywords: ["NAT","port_forward","bridge","PPPoE","wifi"],
+        descriptions: ["Yêu cầu chuyển bridge-mode","Cấu hình port forward camera/NVR","Đổi SSID & mật khẩu Wi-Fi"]
+      }
+    - { name: "installation",     weight: 0.10, site_visit_rate: 0.80, resolved_rate: 0.95,
+        sla_hours_lognorm: {mu: 1.2, sigma: 0.5},
+        keywords: ["lắp_mới","di_dời","đi_dây","hẹn_kỹ_thuật"],
+        descriptions: ["Đặt lịch lắp mới","Xin di dời điểm kéo","Đi lại dây gọn gàng/ẩn dây"]
+      }
+    - { name: "network_outage",   weight: 0.10, site_visit_rate: 0.18, resolved_rate: 0.83,
+        sla_hours_lognorm: {mu: 1.9, sigma: 0.8},
+        keywords: ["mất_kết_nối","đứt_cáp","outage","mạng_rớt"],
+        descriptions: ["Mất kết nối diện rộng khu vực","Rớt mạng chập chờn nhiều lần trong ngày"]
+      }
+    - { name: "app_support",      weight: 0.08, site_visit_rate: 0.01, resolved_rate: 0.92,
+        sla_hours_lognorm: {mu: 1.3, sigma: 0.6},
+        keywords: ["ứng_dụng","đăng_nhập","OTP","tài_khoản"],
+        descriptions: ["Không nhận OTP đăng nhập app","Quên mật khẩu tài khoản quản lý dịch vụ"]
+      }
+    - { name: "contract_change",  weight: 0.06, site_visit_rate: 0.03, resolved_rate: 0.94,
+        sla_hours_lognorm: {mu: 1.3, sigma: 0.5},
+        keywords: ["gia_hạn","nâng_cấp","đổi_gói","tạm_ngưng"],
+        descriptions: ["Yêu cầu nâng cấp gói","Gia hạn hợp đồng","Tạm ngưng dịch vụ tạm thời"]
+      }
+    - { name: "wifi_coverage",    weight: 0.05, site_visit_rate: 0.22, resolved_rate: 0.87,
+        sla_hours_lognorm: {mu: 1.7, sigma: 0.7},
+        keywords: ["wifi_yếu","mesh","repeater","điểm_chết"],
+        descriptions: ["Vùng phủ Wi-Fi yếu tầng 2","Đề nghị khảo sát mesh","Rớt kết nối khi di chuyển trong nhà"]
+      }
+    - { name: "camera",           weight: 0.03, site_visit_rate: 0.25, resolved_rate: 0.89,
+        sla_hours_lognorm: {mu: 1.6, sigma: 0.7},
+        keywords: ["camera","CCTV","NVR","RTSP","cloud_recording"],
+        descriptions: ["Không xem được camera từ xa","Mất kết nối NVR","Cấu hình RTSP trên router"]
+      }
+    - { name: "security",         weight: 0.025, site_visit_rate: 0.18, resolved_rate: 0.90,
+        sla_hours_lognorm: {mu: 1.5, sigma: 0.7},
+        keywords: ["báo_động","cảm_biến","chuông_cửa","motion"],
+        descriptions: ["Lắp thêm cảm biến cửa","Chuông cửa thông minh không hiện thông báo","Motion alert trễ"]
+      }
+    - { name: "POS",              weight: 0.015, site_visit_rate: 0.30, resolved_rate: 0.86,
+        sla_hours_lognorm: {mu: 1.8, sigma: 0.8},
+        keywords: ["POS","máy_quẹt","cổng_thanh_toán","LAN"],
+        descriptions: ["POS không kết nối LAN","Giao dịch POS bị timeout","Cần cấu hình VLAN cho POS"]
+      }
+
+missingness:
+  keywords_presence_rate: 0.70      # 30% ticket không có keywords
+  description_presence_rate: 0.92   # 8% không mô tả
+  missing_close_prob_if_resolved: 0.10  # đã giải quyết nhưng thiếu close_time
+
+resolution:
+  unresolved_rate: 0.12             # base; có topic-specific resolved_rate chồng lên (ưu tiên topic)
+
+correlation:
+  use_profile: true
+  wifi_old_device_boost: 1.5   # nhân weight wifi_coverage nếu cpe_old_device_flag=1
+  use_subscriptions: true
+  pos_multisite_boost: 1.6     # nhân weight POS nếu multi_site_flag=1 (nếu có subs)
