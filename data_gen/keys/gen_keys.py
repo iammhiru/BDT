@@ -7,6 +7,7 @@ import pandas as pd
 import xxhash
 
 from data_gen.common.io_utils import save_csv, save_parquet
+from data_gen.common.minio_utils import upload_folder
 
 def _rng(seed: str) -> random.Random:
     return random.Random(xxhash.xxh64_intdigest(seed))
@@ -114,5 +115,10 @@ def main():
     print(f"[OK] keys PQ  -> {pq_fp}")
     print(f"[STATS] customers={n_customers:,} accounts={n_accounts:,} services={n_services:,}")
 
+    if os.environ.get("UPLOAD_TO_MINIO", "false").lower() == "true":
+            prefix = f"keys/{args.basename}"
+            upload_folder(args.out, prefix)
+            print(f"[UPLOAD] s3://$MINIO_BUCKET/{prefix}/ (uploaded folder {args.out})")
+            
 if __name__ == "__main__":
     main()

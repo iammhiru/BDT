@@ -80,11 +80,11 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-password}
     volumes:
-      - ./data-gen/CRM:/app/CRM:ro
+      - ./data_gen:/app/data_gen:ro
       - out-data:/out
     command: >
       bash -lc "
-        pip install --no-cache-dir pyyaml numpy pandas faker pyarrow boto3 &&
+        pip install --no-cache-dir pyyaml numpy pandas faker pyarrow boto3 xxhash &&
         echo 'crm-gen ready. exec vào để chạy script.' &&
         tail -f /dev/null
       "
