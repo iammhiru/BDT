@@ -5,7 +5,7 @@ paths:
   keys_csv: "data/keys/seed_keys_clean.csv"           # bắt buộc
   crm_csv: "data/raw/crm/month=202505/crm_raw.csv"    # để backfill địa chỉ (tuỳ chọn)
   out_dir: "data/raw/subscriptions"
-  upload_to_minio: false
+  upload_to_minio: true
 
 # Danh mục gói cước + trọng số sử dụng thực tế
 plans:

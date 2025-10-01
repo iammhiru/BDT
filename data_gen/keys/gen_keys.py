@@ -93,6 +93,23 @@ def main():
     ap.add_argument("--seed", type=str, default="2025-keys")
     ap.add_argument("--out", default="data/keys")
     ap.add_argument("--basename", default="seed_keys_clean")
+
+    ap.add_argument(
+        "--bucket",
+        default=os.environ.get("MINIO_BUCKET", "raw-stage"),
+        help="Bucket MinIO để upload (mặc định: raw-stage)",
+    )
+    ap.add_argument(
+        "--prefix",
+        default=None,
+        help="Prefix trên S3/MinIO (mặc định: crm/keys/<basename>/)",
+    )
+    ap.add_argument(
+        "--upload",
+        action="store_true",
+        help="Bật upload lên MinIO (nếu không dùng, có thể đặt env UPLOAD_TO_MINIO=true)",
+    )
+
     args = ap.parse_args()
 
     acc_probs = _parse_probs(args.acc_probs, {1:0.65, 2:0.28, 3:0.07})
@@ -115,10 +132,27 @@ def main():
     print(f"[OK] keys PQ  -> {pq_fp}")
     print(f"[STATS] customers={n_customers:,} accounts={n_accounts:,} services={n_services:,}")
 
-    if os.environ.get("UPLOAD_TO_MINIO", "false").lower() == "true":
-            prefix = f"keys/{args.basename}"
+    want_upload = args.upload or os.environ.get("UPLOAD_TO_MINIO", "false").lower() == "true"
+    print(want_upload)
+    if want_upload:
+        os.environ["MINIO_BUCKET"] = args.bucket
+
+        prefix = args.prefix or f"keys/{args.basename}"
+
+        print("[UPLOAD] Config:",
+              f"endpoint={os.environ.get('MINIO_ENDPOINT')}",
+              f"bucket={os.environ.get('MINIO_BUCKET')}",
+              f"secure={os.environ.get('MINIO_SECURE')}",
+              f"prefix={prefix}",
+              f"src_dir={args.out}",
+              sep="\n  ")
+
+        try:
+            upload_folder(args.out, prefix, args.bucket)
+        except TypeError:
             upload_folder(args.out, prefix)
-            print(f"[UPLOAD] s3://$MINIO_BUCKET/{prefix}/ (uploaded folder {args.out})")
+
+        print(f"[UPLOAD] Done -> s3://{args.bucket}/{prefix}/")
             
 if __name__ == "__main__":
     main()

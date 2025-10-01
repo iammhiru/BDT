@@ -5,7 +5,7 @@ paths:
   keys_csv: "data/keys/seed_keys_clean.csv"             # bắt buộc
   subs_csv: "data/raw/subscriptions/month=202505/subscriptions_raw.csv"  # tuỳ chọn: lấy plan hiệu lực
   out_dir: "data/raw/service_profile"
-  upload_to_minio: false
+  upload_to_minio: true
 
 # ---------------- Plans (nếu không join được từ subs_csv) ----------------
 plans:

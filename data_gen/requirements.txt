@@ -1,0 +1,8 @@
+pyyaml
+numpy
+pandas
+faker
+pyarrow
+boto3
+xxhash
+minio

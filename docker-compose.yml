@@ -72,32 +72,32 @@ services:
     restart: always
     command: scheduler
 
-  crm-gen:
-    image: python:3.13-slim
-    container_name: crm-gen
+  custom-gen:
+    image: custom_gen:latest
+    container_name: custom-gen
     working_dir: /app
     environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-admin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-password}
+      MINIO_ENDPOINT: minio:9000  
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: password
+      MINIO_SECURE: "false"
+      MINIO_BUCKET: raw-stage
     volumes:
       - ./data_gen:/app/data_gen:ro
-      - out-data:/out
-    command: >
-      bash -lc "
-        pip install --no-cache-dir pyyaml numpy pandas faker pyarrow boto3 xxhash &&
-        echo 'crm-gen ready. exec vào để chạy script.' &&
-        tail -f /dev/null
-      "
+      - out-data:/app/data
     depends_on:
       - minio
     networks:
       - lakehouse
     restart: unless-stopped
+
   spark-master:
-    image: bitnami/spark:3.5.5
+    image: spark:1.0
     container_name: spark-master
     hostname: spark-master
     environment:
+      - SPARK_USER=spark
+      - USER=spark
       - SPARK_MODE=master
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
@@ -107,6 +107,7 @@ services:
       - "7077:7077" 
       - "8080:8080"   
     volumes:
+      - ./config/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
       - ./config/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml
       - ./jars:/opt/extra-jars
       - ./jobs:/opt/spark/jobs
@@ -114,10 +115,12 @@ services:
       - lakehouse
 
   spark-worker-1:
-    image: bitnami/spark:3.5.5
+    image: spark:1.0
     container_name: spark-worker-1
     hostname: spark-worker-1
     environment:
+      - SPARK_USER=spark
+      - USER=spark
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_WORKER_MEMORY=1G
@@ -125,6 +128,7 @@ services:
     depends_on:
       - spark-master
     volumes:
+      - ./config/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
       - ./config/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml
       - ./jars:/opt/extra-jars
       - ./jobs:/opt/spark/jobs
@@ -132,10 +136,12 @@ services:
       - lakehouse
 
   spark-worker-2:
-    image: bitnami/spark:3.5.5
+    image: spark:1.0
     container_name: spark-worker-2
     hostname: spark-worker-2
     environment:
+      - SPARK_USER=spark
+      - USER=spark
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_WORKER_MEMORY=1G
@@ -143,6 +149,7 @@ services:
     depends_on:
       - spark-master
     volumes:
+      - ./config/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
       - ./config/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml
       - ./jars:/opt/extra-jars
       - ./jobs:/opt/spark/jobs

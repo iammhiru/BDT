@@ -4,7 +4,7 @@ snapshot_month: "2025-05"
 paths:
   keys_csv: "data/keys/seed_keys_clean.csv"   # đường dẫn seed keys (customer/account/service)
   out_dir: "data/raw/crm"                     # thư mục output local
-  upload_to_minio: false                      # true để upload
+  upload_to_minio: true                     # true để upload
   # nếu upload_to_minio=true, cấu hình MinIO lấy từ ENV:
   # MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_SECURE, MINIO_BUCKET
 

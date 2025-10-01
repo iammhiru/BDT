@@ -181,7 +181,7 @@ def _gen_for_service_day(
             "service_id": service_id,
             "customer_id": customer_id,
             "timestamp": ts_out.isoformat(),
-            "date": ts_out.date().isoformat(),
+            "date_stamp": ts_out.date().isoformat(),
             "hour": ts_out.hour,
             "uplink_bytes": int(ul),
             "downlink_bytes": int(dl),
@@ -323,7 +323,7 @@ def gen_usage(cfg: dict, keys_csv: str, profile_csv: str|None, start_date: str, 
 
         # --- aggregates: HOURLY ---
         if cfg["output"].get("write_hourly", True):
-            hourly = (day_df.groupby(["service_id","customer_id","date","hour"], as_index=False)
+            hourly = (day_df.groupby(["service_id","customer_id","date_stamp","hour"], as_index=False)
                           [["uplink_bytes","downlink_bytes"]].sum())
             out_h_dir = os.path.join(out_dir, "usage_hourly", part)
             save_csv(hourly, out_h_dir, "usage_hourly.csv", index=False)

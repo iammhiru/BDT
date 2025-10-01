@@ -3,7 +3,7 @@ import os
 from typing import Optional
 from minio import Minio
 
-MINIO_ENDPOINT   = os.getenv("MINIO_ENDPOINT",   "localhost:9000")
+MINIO_ENDPOINT   = os.getenv("MINIO_ENDPOINT",   "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "password")
 MINIO_SECURE     = os.getenv("MINIO_SECURE", "false").lower() == "true"
