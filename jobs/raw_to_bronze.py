@@ -20,6 +20,27 @@ def get_spark(app_name, master=None):
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     return spark
 
+def normalize_msisdn_list(df):
+    """ Chuẩn hóa msisdn_list từ raw CSV """
+    return (
+        df.withColumn(
+                "msisdn_list",
+                F.regexp_replace("msisdn_list", r'^\[|\]$', "")  # bỏ [] ngoài
+            ).withColumn(
+                "msisdn_list",
+                F.split(F.regexp_replace("msisdn_list", r'[^0-9,]', ""), ",")  # thành array
+            ).withColumn(
+                "msisdn_list",
+                F.expr("filter(msisdn_list, x -> x != '')")  # bỏ rỗng
+            ).withColumn(
+                "msisdn_list",
+                F.expr("transform(msisdn_list, x -> regexp_replace(x, '^84', '0'))")  # chuẩn hóa số
+            ).withColumn(
+                "msisdn_list",
+                F.to_json("msisdn_list")  # stringify lại để khớp schema STRING
+            )
+    )
+
 
 def schema_crm():
     return StructType([
@@ -27,12 +48,12 @@ def schema_crm():
         StructField("account_id", StringType(), True),
         StructField("service_id", StringType(), True),
         StructField("full_name", StringType(), True),
-        StructField("dob", StringType(), True),
+        StructField("dob", DateType(), True),
         StructField("age", IntegerType(), True),
         StructField("gender", StringType(), True),
         StructField("household_composition", StringType(), True),
         StructField("household_member_age", StringType(), True),
-        StructField("household_change_date", StringType(), True),
+        StructField("household_change_date", DateType(), True),
         StructField("address", StringType(), True),
         StructField("primary_msisdn", StringType(), True),
         StructField("msisdn_list", StringType(), True),
@@ -40,9 +61,9 @@ def schema_crm():
         StructField("ward", StringType(), True),
         StructField("province", StringType(), True),
         StructField("housing_type", StringType(), True),
-        StructField("corner_house_flag", StringType(), True),
+        StructField("corner_house_flag", IntegerType(), True),
         StructField("segment", StringType(), True),
-        StructField("service_start_date", StringType(), True),
+        StructField("service_start_date", DateType(), True),
     ])
 
 
@@ -53,17 +74,17 @@ def schema_subscriptions():
         StructField("service_id", StringType(), True),
         StructField("plan_id", StringType(), True),
         StructField("plan_name", StringType(), True),
-        StructField("bandwidth_dl", StringType(), True),
-        StructField("bandwidth_ul", StringType(), True),
-        StructField("subscription_start_date", StringType(), True),
-        StructField("subscription_end_date", StringType(), True),
-        StructField("upgrade_event_flag", StringType(), True),
-        StructField("upgrade_date", StringType(), True),
+        StructField("bandwidth_dl", DoubleType(), True),
+        StructField("bandwidth_ul", DoubleType(), True),
+        StructField("subscription_start_date", DateType(), True),
+        StructField("subscription_end_date", DateType(), True),
+        StructField("upgrade_event_flag", IntegerType(), True),
+        StructField("upgrade_date", DateType(), True),
         StructField("address", StringType(), True),
-        StructField("multi_site_flag", StringType(), True),
+        StructField("multi_site_flag", IntegerType(), True),
         StructField("multi_site_count", IntegerType(), True),
-        StructField("address_change_flag", StringType(), True),
-        StructField("address_change_date", StringType(), True),
+        StructField("address_change_flag", IntegerType(), True),
+        StructField("address_change_date", DateType(), True),
     ])
 
 
@@ -73,15 +94,15 @@ def schema_service_profile():
         StructField("customer_id", StringType(), True),
         StructField("plan_id", StringType(), True),
         StructField("plan_name", StringType(), True),
-        StructField("bandwidth_dl", StringType(), True),
-        StructField("bandwidth_ul", StringType(), True),
+        StructField("bandwidth_dl", DoubleType(), True),
+        StructField("bandwidth_ul", DoubleType(), True),
         StructField("cpe_id", StringType(), True),
         StructField("cpe_model", StringType(), True),
         StructField("cpe_firmware_version", StringType(), True),
-        StructField("cpe_install_date", StringType(), True),
-        StructField("cpe_replacement_date", StringType(), True),
-        StructField("cpe_old_device_flag", StringType(), True),
-        StructField("wifi_clients_count_daily", IntegerType(), True),
+        StructField("cpe_install_date", DateType(), True),
+        StructField("cpe_replacement_date", DateType(), True),
+        StructField("cpe_old_device_flag", IntegerType(), True),
+        StructField("wifi_clients_count_daily", StringType(), True),
     ])
 
 
@@ -130,7 +151,6 @@ def schema_browsing():
 def schema_cdr():
     return StructType([
         StructField("cdr_id", StringType(), False),
-        StructField("subscriber_id", StringType(), True),
         StructField("msisdn", StringType(), True),
         StructField("timestamp", StringType(), True),
         StructField("cell_id", StringType(), True),
@@ -217,7 +237,7 @@ def create_bronze_tables(spark):
             cpe_install_date       DATE,
             cpe_replacement_date   DATE,
             cpe_old_device_flag    INT,
-            wifi_clients_count_daily INT
+            wifi_clients_count_daily STRING
         )
         PARTITIONED BY (month STRING)
         STORED AS PARQUET
@@ -282,7 +302,6 @@ def create_bronze_tables(spark):
     spark.sql("""
         CREATE TABLE IF NOT EXISTS bronze.cdr_bronze (
             cdr_id             STRING,
-            subscriber_id      STRING,
             msisdn             STRING,
             timestamp          STRING,
             cell_id            STRING,
@@ -308,20 +327,28 @@ def process_snapshot(spark, source, schema, month):
     input_path = f"s3a://raw-stage/{source}/month={month}/*.csv"
     output_table = f"bronze.{source}_bronze"
 
-    # Đọc dữ liệu thô
     df = (
         spark.read.option("header", True)
+        .option("quote", "\"")       # FIX HERE: tránh lỗi parse CSV có dấu , hoặc "
+        .option("escape", "\"")      # FIX HERE
         .schema(schema)
         .csv(input_path)
         .withColumn("month", F.lit(month))
     )
 
+    # Xử lý đặc biệt theo source
+    if source == "crm":
+        df = normalize_msisdn_list(df)   # FIX HERE: chuẩn hóa msisdn_list
+
+    if source == "service_profile":
+        df = df.withColumn("wifi_clients_count_daily", F.col("wifi_clients_count_daily").cast("string"))
+
     # Ghi dữ liệu vào bảng bronze đã tạo
     (df.write
-    .mode("overwrite")
-    .format("parquet")
-    .partitionBy("month")
-    .saveAsTable(output_table))
+        .mode("overwrite")
+        .format("parquet")
+        .insertInto(output_table, overwrite=True))
+
 
     print(f"[{source}] Snapshot {month} → bronze done.")
 

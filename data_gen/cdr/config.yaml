@@ -85,7 +85,7 @@ persona_mix:
 # ---------------- Lượng dữ liệu & phân phối event ----------------
 volume:
   # Poisson ổn định (NumPy) — số EVENT / 1.000 thuê bao / ngày (trước khi nhân persona)
-  events_per_1k_subs: 22000      # to ra: 22k/1000/day → 9k subs ≈ 198k events/day (còn nhân persona/weekday)
+  events_per_1k_subs: 16000      # to ra: 16k/1000/day → 9k subs ≈ 144k events/day (còn nhân persona/weekday)
   weekday_multiplier: [1.00, 1.05, 1.07, 1.00, 0.95, 0.85, 0.80]  # Mon..Sun
   # tỉ lệ event theo loại (sum≈1); data >> voice/sms
   event_type_weights: { data: 0.86, voice: 0.10, sms: 0.04 }
