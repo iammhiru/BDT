@@ -2,12 +2,11 @@ seed: "profile-2025"
 snapshot_month: "2025-05"
 
 paths:
-  keys_csv: "data/keys/seed_keys_clean.csv"             # bắt buộc
-  subs_csv: "data/raw/subscriptions/month=202505/subscriptions_raw.csv"  # tuỳ chọn: lấy plan hiệu lực
+  keys_csv: "data/keys/seed_keys_clean.csv"           
+  subs_csv: "data/raw/subscriptions/month=202505/subscriptions_raw.csv"  
   out_dir: "data/raw/service_profile"
   upload_to_minio: true
 
-# ---------------- Plans (nếu không join được từ subs_csv) ----------------
 plans:
   catalog:
     - { plan_id: "PLN001", name: "Fiber 100", dl: 100, ul: 100, weight: 0.35 }
@@ -45,11 +44,8 @@ dates:
   replace_days_after_install_min: 60
   replace_days_after_install_max: 700
 
-# ---------------- Wifi clients (MAC unique/ngày) ----------------
 wifi_clients:
-  # tỉ lệ thiếu toàn bộ field (ONT không báo…)
   missing_rate: 0.10
-  # Mean theo băng thông (dl) — chọn bucket đầu tiên có max_dl >= dl; nếu không khớp dùng default
   by_bandwidth:
     - { max_dl: 120, mean: 4,  std: 2 }
     - { max_dl: 180, mean: 6,  std: 3 }
@@ -58,11 +54,10 @@ wifi_clients:
     - { max_dl: 600, mean: 14, std: 6 }
   default_mean: 6
   default_std: 3
-  weekend_boost: 1.10   # cuối tuần đông người hơn một chút
-  floor_zero: true      # không âm; làm tròn về số nguyên
+  weekend_boost: 1.10   
+  floor_zero: true      
 
-# ---------------- Missingness ngẫu nhiên cho plan/bandwidth ----------------
 missingness:
   plan_id_null_rate: 0.005
   plan_name_null_rate: 0.004
-  bandwidth_null_rate: 0.003
+  bandwidth_null_rate: 0.000

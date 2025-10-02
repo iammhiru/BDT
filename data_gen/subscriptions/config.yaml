@@ -22,7 +22,7 @@ periods:
 
 dates:
   # Tỉ lệ service đang "còn hiệu lực" tại snapshot
-  active_rate: 0.88
+  active_rate: 0.95
   # Độ dài hợp đồng (tháng) theo histogram
   contract_months_hist: { "6": 0.20, "12": 0.55, "18": 0.15, "24": 0.10 }
   # Khoảng trống giữa các kỳ (tháng) khi tái ký

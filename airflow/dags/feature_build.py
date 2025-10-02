@@ -9,20 +9,21 @@ default_args = {
 }
 
 with DAG(
-    dag_id="check_silver_sample",
+    dag_id="silver_to_feature",
     default_args=default_args,
-    schedule_interval=None,   # chạy thủ công
+    schedule_interval=None,  
     catchup=False,
-    tags=["silver", "check"],
+    tags=["spark", "silver", "feature"],
 ) as dag:
 
-    check_task = SparkSubmitOperator(
-        task_id="check_silver_data",
+    feature_task = SparkSubmitOperator(
+        task_id="silver_to_feature_month",
         conn_id="spark_default",
-        application="/opt/spark/jobs/check_silver_sample.py",
-        name="check-silver-sample",
-        verbose=True,
-        jars="/opt/extra-jars/hadoop-aws-3.3.2.jar,/opt/extra-jars/aws-java-sdk-bundle-1.11.901.jar",
+        application="/opt/spark/jobs/build_feature.py",  
+        name="silver-to-feature-month",
+        application_args=[
+            "--as_of_month", "202505"
+        ],
         conf={
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
             "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
@@ -30,4 +31,6 @@ with DAG(
             "spark.hadoop.fs.s3a.secret.key": "password",
             "spark.hadoop.fs.s3a.path.style.access": "true",
         },
+        jars="/opt/extra-jars/hadoop-aws-3.3.2.jar,/opt/extra-jars/aws-java-sdk-bundle-1.11.901.jar",
+        verbose=True,
     )

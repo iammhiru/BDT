@@ -11,7 +11,7 @@ paths:
   upload_to_minio: false
 
 volume:
-  sessions_per_1k_services: 1840
+  sessions_per_1k_services: 1500
   weekday_multiplier: [1.10, 1.15, 1.15, 1.10, 1.05, 0.90, 0.85]
   events_per_session_mean: 8.0    
   start_hour_weights:
@@ -39,29 +39,23 @@ volume:
     "21": 0.030
     "22": 0.020
     "23": 0.015
-  # Khoảng giãn giữa các event trong session (giây)
-  inter_event_seconds: [5, 120]   # uniform
-
+  inter_event_seconds: [5, 120]  
 id_fields:
-  session_presence_rate: 0.92    # tỉ lệ có session_id
-  duration_presence_rate: 0.97   # tỉ lệ có duration
+  session_presence_rate: 0.96  
+  duration_presence_rate: 0.98  
 
 duration_model:
-  # thời lượng đọc (giây) ~ lognormal * heavy tail
-  lognorm: { mu: 4.2, sigma: 1.2 }   # lệch chuẩn cao
+  lognorm: { mu: 4.2, sigma: 1.2 }   
   heavy_tail:
     prob: 0.08
     pareto_alpha: 1.6
     pareto_scale: 2.0
-  clip_seconds: [1, 1800]            # 1s .. 30 phút
-
+  clip_seconds: [1, 1800]            
 topic_mix:
-  # tỉ lệ chọn “nhóm chủ đề”
   weights:
-    general_web: 0.70
-    long_tail:   0.25
-    security_cam_family: 0.05   # camera/CCTV/doorbell/alarm… thiểu số
-  # mapping domain -> topic chi tiết cho 2 nhóm structured (general & security)
+    general_web: 0.65
+    long_tail:   0.20
+    security_cam_family: 0.15  
   general_domains:
     news:
       weight: 0.12

@@ -95,7 +95,7 @@ housing:
     - { name: "biệt_thự",  weight: 0.02 }
 
 msisdn:
-  presence_rate: 0.92            # ~8% khách không có số điện thoại
+  presence_rate: 0.97         
   extra_per_customer_max: 2       # số phụ 0..2
 
 service:
