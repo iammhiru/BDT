@@ -358,7 +358,7 @@ def process_daily(spark, source, schema, date):
     Xử lý dữ liệu log theo date (Usage, Tickets, Browsing, CDR)
     """
     if source == "usage":
-        input_path = f"s3a://raw-stage/{source}/usage_raw_5min_hour/date={date}/*.csv"
+        input_path = f"s3a://raw-stage/{source}/usage_raw_10min_hour/date={date}/*.csv"
     else:
         input_path = f"s3a://raw-stage/{source}/{source}_raw/date={date}/*.csv"
     output_table = f"bronze.{source}_bronze"

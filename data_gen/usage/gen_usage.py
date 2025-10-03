@@ -107,10 +107,9 @@ def _gen_for_service_day(
     jitter_max: int,
     random_drop_pct: float,
 ) -> pd.DataFrame:
-    if granularity == "5min":
-        intervals = 288; step = timedelta(minutes=5); seconds = 300
-    else:  # "hour"
-        intervals = 24;  step = timedelta(hours=1);   seconds = 3600
+    intervals = 144               
+    step = timedelta(minutes=10)  
+    seconds = 600               
 
     rows = []
     t0 = datetime(the_day.year, the_day.month, the_day.day)
@@ -237,7 +236,7 @@ def gen_usage(cfg: dict, keys_csv: str, profile_csv: str|None, start_date: str, 
 
     minute_ratio_max = float(scale.get("minute_cohort_max_ratio", 0.60))
     rows_target = int(scale.get("rows_per_day_target", 1_000_000))
-    force_gran = scale.get("force_granularity", None)  # "5min"|"hour"|None
+    force_gran = scale.get("force_granularity", "5min")  # "5min"|"hour"|None
 
     # per-service id pools
     mac_pools, dev_pools = {}, {}
@@ -321,22 +320,9 @@ def gen_usage(cfg: dict, keys_csv: str, profile_csv: str|None, start_date: str, 
                               "usage_raw.parquet", partition_cols=["date_part"])
         print(f"[OK] RAW {d} -> rows={len(day_df):,}")
 
-        # --- aggregates: HOURLY ---
-        if cfg["output"].get("write_hourly", True):
-            hourly = (day_df.groupby(["service_id","customer_id","date_stamp","hour"], as_index=False)
-                          [["uplink_bytes","downlink_bytes"]].sum())
-            out_h_dir = os.path.join(out_dir, "usage_hourly", part)
-            save_csv(hourly, out_h_dir, "usage_hourly.csv", index=False)
-            save_parquet(hourly.assign(date_part=d.strftime('%Y%m%d')),
-                         os.path.join(out_dir, "usage_hourly"),
-                         "usage_hourly.parquet", partition_cols=["date_part"])
-
-        # upload nếu bật
         if upload:
-            upload_file(csv_fp, f"usage/usage_raw_5min_hour/{part}/usage_raw.csv", content_type="text/csv")
-            upload_folder(os.path.join(out_dir, "usage_raw_5min_hour", "usage_raw.parquet"), "usage/usage_raw_5min_hour")
-            if cfg["output"].get("write_hourly", True):
-                upload_folder(os.path.join(out_dir, "usage_hourly", "usage_hourly.parquet"), "usage/usage_hourly")
+            upload_file(csv_fp, f"usage/usage_raw_10min_hour/{part}/usage_raw.csv", content_type="text/csv")
+            upload_folder(os.path.join(out_dir, "usage_raw_10min_hour", "usage_raw.parquet"), "usage/usage_raw_10min_hour")
 
 
 def main():

@@ -123,7 +123,7 @@ services:
       - USER=spark
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_MEMORY=2G
       - SPARK_WORKER_CORES=1
     depends_on:
       - spark-master
@@ -144,7 +144,7 @@ services:
       - USER=spark
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_MEMORY=2G
       - SPARK_WORKER_CORES=1
     depends_on:
       - spark-master
