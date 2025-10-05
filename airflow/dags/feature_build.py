@@ -19,11 +19,9 @@ with DAG(
     feature_task = SparkSubmitOperator(
         task_id="silver_to_feature_month",
         conn_id="spark_default",
-        application="/opt/spark/jobs/build_feature.py",  
+        application="/opt/spark/jobs/silver_to_gold.py",  
         name="silver-to-feature-month",
-        application_args=[
-            "--as_of_month", "202505"
-        ],
+        application_args=["--month", "202508"],
         conf={
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
             "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",

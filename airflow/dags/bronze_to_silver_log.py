@@ -25,7 +25,7 @@ with DAG(
         application="/opt/spark/jobs/bronze_to_silver.py",
         name="bronze-to-silver-date",
         application_args=[
-            "--date", "{{ execution_date.strftime('%Y%m%d') }}"   # lấy ngày theo execution_date
+            "--date", "{{ execution_date.strftime('%Y%m%d') }}"   
         ],
         jars="/opt/extra-jars/hadoop-aws-3.3.2.jar,/opt/extra-jars/aws-java-sdk-bundle-1.11.901.jar",
         conf={
