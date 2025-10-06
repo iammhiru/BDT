@@ -25,9 +25,32 @@ def get_spark(app_name, master="spark://spark-master:7077"):
     spark.sparkContext.setLogLevel("INFO")
     return spark
 
-def get_previous_month(current_month):
-    """Tính tháng trước - FIX cho data hiện tại"""
-    return current_month  # Dùng chính tháng đó
+def get_actual_date_range(snapshot_month, days_back):
+    """Lấy date range thực tế dựa trên data available (1/6 - 31/8)"""
+    snapshot_date = datetime.strptime(snapshot_month + '01', '%Y%m%d').date()
+    
+    # Data available từ 1/6/2025
+    available_start = datetime(2025, 6, 1).date()
+    
+    # Tính start date mong muốn
+    desired_start = snapshot_date - timedelta(days=days_back-1)
+    
+    # Nếu mong muốn trước data available → dùng available_start
+    actual_start = max(desired_start, available_start)
+    
+    # Tính số ngày thực tế có data
+    actual_days = (snapshot_date - actual_start).days + 1
+    
+    # Tạo date range thực tế
+    date_range = []
+    current_date = actual_start
+    while current_date <= snapshot_date:
+        date_range.append(current_date.strftime('%Y%m%d'))
+        current_date += timedelta(days=1)
+    
+    print(f"📅 Actual data: {len(date_range)} days for {days_back}d lookback (available: 1/6 - 31/8)")
+    
+    return date_range, actual_days
 
 def clean_msisdn(col_expr):
     """Hàm làm sạch msisdn"""
@@ -103,11 +126,11 @@ def create_feature_tables(spark):
             
             -- NHÓM 6: HỖ TRỢ KỸ THUẬT
             wifi_coverage_ticket_cnt_90d INT,
-            security_issue_ticket_cnt_180d INT,
+            security_issue_ticket_cnt_90d INT,
             
             -- NHÓM 7: KINH DOANH
             retail_peak_usage_pattern_90d_flag INT,
-            pos_related_ticket_cnt_180d INT,
+            pos_related_ticket_cnt_90d INT,
             multi_site_service_count INT,
             avg_daily_wifi_clients_30d DOUBLE,
             
@@ -129,16 +152,16 @@ def create_feature_tables(spark):
     """)
 
 def calculate_direct_intent_features(spark, snapshot_month, data_month):
-    """NHÓM 1: Ý ĐỊNH/QUAN TÂM TRỰC TIẾP"""
+    """NHÓM 1: Ý ĐỊNH/QUAN TÂM TRỰC TIẾP - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating direct intent features...")
-    
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_30d = F.date_sub(snapshot_date, 29)
-    start_date_90d = F.date_sub(snapshot_date, 89)
     
     df_customers = get_customer_base(spark, data_month)
     df_tickets = spark.table("silver.tickets_silver")
     df_browsing = spark.table("silver.browsing_silver")
+    
+    # SỬA: Sử dụng date range thực tế
+    date_range_30d, actual_days_30d = get_actual_date_range(data_month, 30)
+    date_range_90d, actual_days_90d = get_actual_date_range(data_month, 90)
     
     # 1. camera_install_inquiry_30d_flag
     camera_keywords = ["camera", "cctv", "lắp đặt", "khảo sát vị trí", "chuông cửa", "báo động"]
@@ -146,7 +169,7 @@ def calculate_direct_intent_features(spark, snapshot_month, data_month):
     
     df_camera_inquiry = (
         df_tickets
-        .filter((F.col("create_time") >= start_date_30d) & (F.col("create_time") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_30d))
         .filter(
             F.lower(F.col("topic_group")).rlike(keyword_pattern) |
             F.lower(F.col("keywords")).rlike(keyword_pattern) |
@@ -159,11 +182,11 @@ def calculate_direct_intent_features(spark, snapshot_month, data_month):
     # 2. camera_security_ticket_cnt_90d - với deduplication
     security_topics = ["camera", "security", "nat_ddns", "video_storage", "motion_alert", "wiring_outdoor"]
     
-    # Deduplicate tickets trong 48h cho cùng service_id và topic_group
+    # Deduplicate tickets trong 24h cho sample data
     ticket_window = Window.partitionBy("service_id", "topic_group").orderBy("create_time")
     df_dedup_tickets = (
         df_tickets
-        .filter((F.col("create_time") >= start_date_90d) & (F.col("create_time") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_90d))
         .filter(F.lower(F.col("topic_group")).isin([t.lower() for t in security_topics]))
         .withColumn("prev_ticket_time", F.lag("create_time").over(ticket_window))
         .withColumn("hours_since_prev", 
@@ -171,7 +194,7 @@ def calculate_direct_intent_features(spark, snapshot_month, data_month):
                          (F.unix_timestamp("create_time") - F.unix_timestamp("prev_ticket_time")) / 3600)
                     .otherwise(None))
         .withColumn("is_duplicate", 
-                   F.when((F.col("hours_since_prev").isNotNull()) & (F.col("hours_since_prev") <= 48), 1)
+                   F.when((F.col("hours_since_prev").isNotNull()) & (F.col("hours_since_prev") <= 24), 1)
                     .otherwise(0))
         .filter(F.col("is_duplicate") == 0)
     )
@@ -182,14 +205,23 @@ def calculate_direct_intent_features(spark, snapshot_month, data_month):
         .agg(F.count("ticket_id").alias("camera_security_ticket_cnt_90d"))
     )
     
-    # 3. browsing_camera_topic_hits_30d
+    # 3. browsing_camera_topic_hits_30d - TỐI ƯU CHO SAMPLE DATA
+    camera_domains = [
+        "hikvision.com", "dahua-technology.com", "reolink.com", "arlo.com", 
+        "ezviz.com", "kbvision.vn", "imoulife.com", "cctv.com", "ipcamtalk.com",
+        "ipvm.com", "securityinfowatch.com", "cctvforum.com", "ring.com",
+        "nest.com", "eufy.com", "wyze.com", "simplisafe.com", "ajax.systems",
+        "home-assistant.io", "iot.tuya.com"
+    ]
+    
     df_browsing_hits = (
         df_browsing
-        .filter((F.col("timestamp") >= start_date_30d) & (F.col("timestamp") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_30d))
         .filter(
-            F.lower(F.col("topic")).rlike(keyword_pattern) |
-            F.lower(F.col("domain")).rlike(keyword_pattern)
+            F.col("domain").isin(camera_domains) |
+            F.lower(F.col("topic")).rlike(keyword_pattern)
         )
+        .filter(F.col("duration") > 30.0)
         .groupBy("customer_id")
         .agg(F.count("timestamp").alias("browsing_camera_topic_hits_30d"))
     )
@@ -203,41 +235,46 @@ def calculate_direct_intent_features(spark, snapshot_month, data_month):
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
     
+    # DEBUG: In distribution
+    print("📊 Direct Intent Features Distribution:")
+    df_result.select(
+        F.avg("camera_install_inquiry_30d_flag").alias("avg_inquiry_flag"),
+        F.avg("camera_security_ticket_cnt_90d").alias("avg_ticket_cnt"), 
+        F.avg("browsing_camera_topic_hits_30d").alias("avg_browsing_hits")
+    ).show()
+    
     return df_result
 
 def calculate_usage_pattern_features(spark, snapshot_month, data_month):
-    """NHÓM 2: HÀNH VI SỬ DỤNG TẠI NHÀ"""
+    """NHÓM 2: HÀNH VI SỬ DỤNG TẠI NHÀ - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating usage pattern features...")
-    
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_30d = F.date_sub(snapshot_date, 29)
     
     df_customers = get_customer_base(spark, data_month)
     df_usage = spark.table("silver.usage_silver")
     
-    # Lấy date range cho partition filter
-    start_date_py = datetime.strptime(data_month + '01', '%Y%m%d').date()
-    date_range = [(start_date_py - timedelta(days=x)).strftime('%Y%m%d') for x in range(30, 0, -1)]
+    # SỬA: Sử dụng date range thực tế
+    date_range_30d, actual_days_30d = get_actual_date_range(data_month, 30)
     
     df_usage_30d = (
         df_usage
-        .filter(F.col("date").isin(date_range))
+        .filter(F.col("date").isin(date_range_30d))
         .withColumn("hour", F.hour("timestamp"))
         .withColumn("uplink_mb", F.col("uplink_bytes") / (1024 * 1024))
         .withColumn("downlink_mb", F.col("downlink_bytes") / (1024 * 1024))
     )
     
-    # 4. night_small_ul_streaksum_30d - Chuỗi đêm có UL nhỏ-đều (0-5h)
+    # 4. night_small_ul_streaksum_30d - ĐIỀU CHỈNH THRESHOLDS CHO SAMPLE DATA
     df_night_hourly = (
         df_usage_30d
         .filter(F.col("hour").between(0, 5))
         .groupBy("customer_id", "date_stamp", "hour")
         .agg(F.sum("uplink_mb").alias("hourly_ul_mb"))
         .withColumn("hour_achieved", 
-                   F.when((F.col("hourly_ul_mb") >= 5) & (F.col("hourly_ul_mb") <= 60), 1).otherwise(0))
+                   F.when((F.col("hourly_ul_mb") >= 0.5) & (F.col("hourly_ul_mb") <= 20.0), 1)
+                    .otherwise(0))
     )
     
-    # Tìm các đêm đạt (≥4/6 giờ đạt, không có bulk UL >500MB/h)
+    # Tìm các đêm đạt (≥4/6 giờ đạt, không có bulk UL >100MB/h)
     df_night_daily = (
         df_night_hourly
         .groupBy("customer_id", "date_stamp")
@@ -246,10 +283,11 @@ def calculate_usage_pattern_features(spark, snapshot_month, data_month):
             F.max("hourly_ul_mb").alias("max_hourly_ul")
         )
         .withColumn("night_achieved", 
-                   F.when((F.col("achieved_hours") >= 4) & (F.col("max_hourly_ul") <= 500), 1).otherwise(0))
+                   F.when((F.col("achieved_hours") >= 4) & (F.col("max_hourly_ul") <= 100.0), 1)
+                    .otherwise(0))
     )
     
-    # Tìm chuỗi liên tiếp ≥3 đêm
+    # Tìm chuỗi liên tiếp ≥2 đêm
     window_spec = Window.partitionBy("customer_id").orderBy("date_stamp")
     df_night_streaks = (
         df_night_daily
@@ -261,18 +299,19 @@ def calculate_usage_pattern_features(spark, snapshot_month, data_month):
                    .over(window_spec))
         .groupBy("customer_id", "streak_id")
         .agg(F.count("*").alias("streak_length"))
-        .filter(F.col("streak_length") >= 3)
+        .filter(F.col("streak_length") >= 2)
         .groupBy("customer_id")
         .agg(F.sum("streak_length").alias("night_small_ul_streaksum_30d"))
     )
     
-    # 5. small_ul_all_day_streaksum_30d - Chuỗi ngày có UL nhỏ-đều cả ngày
+    # 5. small_ul_all_day_streaksum_30d - ĐIỀU CHỈNH THRESHOLDS
     df_all_day_hourly = (
         df_usage_30d
         .groupBy("customer_id", "date_stamp", "hour")
         .agg(F.sum("uplink_mb").alias("hourly_ul_mb"))
         .withColumn("hour_achieved", 
-                   F.when((F.col("hourly_ul_mb") >= 5) & (F.col("hourly_ul_mb") <= 60), 1).otherwise(0))
+                   F.when((F.col("hourly_ul_mb") >= 0.5) & (F.col("hourly_ul_mb") <= 20.0), 1)
+                    .otherwise(0))
     )
     
     # Tính gap giữa các giờ không đạt
@@ -309,11 +348,10 @@ def calculate_usage_pattern_features(spark, snapshot_month, data_month):
         )
         .join(df_gap_lengths, ["customer_id", "date_stamp"], "left")
         .fillna(0)
-        # Ngày đạt: ≥16/24 giờ đạt, mỗi khung có ≥3 giờ đạt, không có gap >3 giờ
         .withColumn("day_achieved", 
-                   F.when((F.col("achieved_hours") >= 16) & 
+                   F.when((F.col("achieved_hours") >= 12) & 
                           (F.col("total_hours") >= 20) &
-                          (F.col("max_gap_length") <= 3), 1)
+                          (F.col("max_gap_length") <= 4), 1)
                    .otherwise(0))
     )
     
@@ -327,7 +365,7 @@ def calculate_usage_pattern_features(spark, snapshot_month, data_month):
                    .over(window_spec))
         .groupBy("customer_id", "streak_id")
         .agg(F.count("*").alias("streak_length"))
-        .filter(F.col("streak_length") >= 3)
+        .filter(F.col("streak_length") >= 2)
         .groupBy("customer_id")
         .agg(F.sum("streak_length").alias("small_ul_all_day_streaksum_30d"))
     )
@@ -339,6 +377,13 @@ def calculate_usage_pattern_features(spark, snapshot_month, data_month):
         .fillna(0)
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
+    
+    # DEBUG: In distribution
+    print("📊 Usage Pattern Features Distribution:")
+    df_result.select(
+        F.avg("night_small_ul_streaksum_30d").alias("avg_night_streak"),
+        F.avg("small_ul_all_day_streaksum_30d").alias("avg_day_streak")
+    ).show()
     
     return df_result
 
@@ -357,12 +402,13 @@ def calculate_housing_context_features(spark, snapshot_month, data_month):
         .select("customer_id", "housing_type", "corner_house_flag")
         .distinct()
         .withColumn("housing_type_street_house_flag",
-                   F.when(F.lower(F.col("housing_type")).isin(["nhà phố", "biệt thự", "mặt tiền", "nhà góc"]), 1)
+                   F.when(F.col("housing_type").isin(["nhà_phố", "biệt_thự", "mặt_tiền", "góc"]), 1)
                     .otherwise(0))
         .withColumn("corner_house_probability_score",
-                   F.when(F.col("corner_house_flag") == 1, 0.9)
-                    .when(F.lower(F.col("housing_type")).contains("góc"), 0.7)
-                    .when(F.lower(F.col("housing_type")).contains("mặt tiền"), 0.5)
+                   F.when(F.col("corner_house_flag") == 1, 0.9)  
+                    .when(F.col("housing_type") == "góc", 0.8)   
+                    .when(F.col("housing_type") == "mặt_tiền", 0.6) 
+                    .when(F.col("housing_type").isin(["nhà_phố", "biệt_thự"]), 0.4)  
                     .otherwise(0.1))
         .select("customer_id", "housing_type_street_house_flag", "corner_house_probability_score")
         .withColumn("snapshot_month", F.lit(snapshot_month))
@@ -371,11 +417,10 @@ def calculate_housing_context_features(spark, snapshot_month, data_month):
     return df_housing
 
 def calculate_service_event_features(spark, snapshot_month, data_month):
-    """NHÓM 4: SỰ KIỆN DỊCH VỤ"""
+    """NHÓM 4: SỰ KIỆN DỊCH VỤ - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating service event features...")
     
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_90d = F.date_sub(snapshot_date, 89)
+    snapshot_date = F.to_date(F.lit(data_month + '01'), 'yyyyMMdd')
     
     df_subscriptions = spark.table("silver.subscriptions_silver") \
         .filter(F.col("month") == data_month) \
@@ -387,13 +432,12 @@ def calculate_service_event_features(spark, snapshot_month, data_month):
         df_subscriptions
         .withColumn("service_address_change_90d_flag",
                    F.when((F.col("address_change_date").isNotNull()) & 
-                          (F.col("address_change_date") >= start_date_90d) &
-                          (F.col("address_change_date") <= snapshot_date), 1)
+                          (F.datediff(snapshot_date, F.col("address_change_date")).between(0, 89)), 1)
                     .otherwise(0))
         .withColumn("broadband_upgrade_90d_flag",
                    F.when((F.col("upgrade_event_flag") == 1) &
-                          (F.col("upgrade_date") >= start_date_90d) &
-                          (F.col("upgrade_date") <= snapshot_date), 1)
+                          (F.col("upgrade_date").isNotNull()) &
+                          (F.datediff(snapshot_date, F.col("upgrade_date")).between(0, 89)), 1)
                     .otherwise(0))
         .groupBy("customer_id")
         .agg(
@@ -406,102 +450,95 @@ def calculate_service_event_features(spark, snapshot_month, data_month):
     return df_service_events
 
 def calculate_presence_mobility_features(spark, snapshot_month, data_month):
-    """NHÓM 5: HIỆN DIỆN/VẮNG NHÀ"""
+    """NHÓM 5: HIỆN DIỆN/VẮNG NHÀ - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating presence & mobility features...")
-    
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_30d = F.date_sub(snapshot_date, 29)
     
     df_customers = get_customer_base(spark, data_month)
     df_usage = spark.table("silver.usage_silver")
     df_cdr = spark.table("silver.cdr_silver")
     df_msisdn_mapping = get_msisdn_to_customer_mapping(spark, data_month)
     
-    # Date range cho partition filter
-    start_date_py = datetime.strptime(data_month + '01', '%Y%m%d').date()
-    date_range = [(start_date_py - timedelta(days=x)).strftime('%Y%m%d') for x in range(30, 0, -1)]
+    # SỬA: Sử dụng date range thực tế
+    date_range_30d, actual_days_30d = get_actual_date_range(data_month, 30)
     
-    # 10. home_absence_days_from_usage_30d
-    # Tính lưu lượng theo ngày và xác định khung giờ hoạt động
+    # 10. home_absence_days_from_usage_30d - ĐIỀU CHỈNH THRESHOLDS
+    df_daily_usage = (
+        df_usage
+        .filter(F.col("date").isin(date_range_30d))
+        .groupBy("customer_id", "date_stamp")
+        .agg(
+            F.sum("uplink_bytes").alias("total_ul_bytes"),
+            F.sum("downlink_bytes").alias("total_dl_bytes")
+        )
+        .withColumn("daily_bytes", F.col("total_ul_bytes") + F.col("total_dl_bytes"))
+        .withColumn("daily_mb", F.col("daily_bytes") / (1024 * 1024))
+    )
+    
+    # Tính activity blocks với ngưỡng thấp hơn cho sample data
     df_hourly_usage = (
         df_usage
-        .filter(F.col("date").isin(date_range))
+        .filter(F.col("date").isin(date_range_30d))
         .withColumn("hour", F.hour("timestamp"))
         .withColumn("time_block",
                    F.when(F.col("hour").between(6, 9), "morning")
                     .when(F.col("hour").between(18, 24), "evening")
                     .otherwise("other"))
-    )
-    
-    # FIX: Sửa lỗi cộng cột - dùng F.col() cho từng cột
-    df_activity_blocks = (
-        df_hourly_usage
         .filter(F.col("time_block").isin(["morning", "evening"]))
         .groupBy("customer_id", "date_stamp", "time_block")
         .agg(F.sum(F.col("uplink_bytes") + F.col("downlink_bytes")).alias("block_bytes"))
-        .withColumn("has_activity", F.when(F.col("block_bytes") > 50 * 1024 * 1024, 1).otherwise(0))  # 50MB threshold
+        .withColumn("has_activity", 
+                   F.when(F.col("block_bytes") > 10 * 1024 * 1024, 1)
+                    .otherwise(0))
         .groupBy("customer_id", "date_stamp")
         .agg(F.sum("has_activity").alias("active_blocks"))
     )
     
-    # FIX: Sửa lỗi tương tự trong daily usage
-    df_daily_usage = (
-        df_usage
-        .filter(F.col("date").isin(date_range))
-        .groupBy("customer_id", "date_stamp")
-        .agg(F.sum(F.col("uplink_bytes") + F.col("downlink_bytes")).alias("daily_bytes"))
-        .withColumn("daily_mb", F.col("daily_bytes") / (1024 * 1024))
-        .join(df_activity_blocks, ["customer_id", "date_stamp"], "left")
+    df_absence = (
+        df_daily_usage
+        .join(df_hourly_usage, ["customer_id", "date_stamp"], "left")
         .fillna(0)
         .withColumn("is_absent", 
-                   F.when((F.col("daily_mb") < 200) & (F.col("active_blocks") < 2), 1)
+                   F.when((F.col("daily_mb") < 50) & (F.col("active_blocks") < 2), 1)
                     .otherwise(0))
-    )
-    
-    df_absence_days = (
-        df_daily_usage
         .groupBy("customer_id")
         .agg(F.sum("is_absent").alias("home_absence_days_from_usage_30d"))
     )
     
     # 11. away_days_from_cdr_30d & 12. multi_area_mobility_days_30d
-    df_cdr_30d = (
+    df_cdr_filtered = (
         df_cdr
-        .filter(F.col("date").isin(date_range))
+        .filter(F.col("date").isin(date_range_30d))
         .withColumn("hour", F.hour("timestamp"))
     )
     
-    df_night_cdr = (
-        df_cdr_30d
-        .filter(F.col("hour").between(21, 23) | F.col("hour").between(0, 6))
-    )
-    
-    df_night_cdr_mapped = (
-        df_night_cdr
+    # Xác định home cluster - DÙNG TOÀN BỘ 30 NGÀY
+    df_home_analysis = (
+        df_cdr_filtered
         .join(df_msisdn_mapping, "msisdn", "inner")
-        .select("customer_id", "cell_id", "timestamp")
-    )
-    
-    # Xác định home cell cluster (14-30 ngày gần nhất)
-    df_home_period = (
-        df_night_cdr_mapped
+        .select("customer_id", "cell_id", "timestamp", "hour")
         .withColumn("date_stamp", F.to_date("timestamp"))
-        .filter(F.col("date_stamp") >= F.date_sub(snapshot_date, 29))  # 30 ngày
-        .groupBy("customer_id", "cell_id")
-        .agg(F.count("*").alias("appearance_count"))
+        .withColumn("is_night", F.when(F.col("hour").between(21, 6), 1).otherwise(0))
     )
     
-    window_spec = Window.partitionBy("customer_id").orderBy(F.desc("appearance_count"))
+    # Home cluster = cell xuất hiện nhiều nhất vào ban đêm
+    df_night_appearance = (
+        df_home_analysis
+        .filter(F.col("is_night") == 1)
+        .groupBy("customer_id", "cell_id")
+        .agg(F.count("*").alias("night_count"))
+    )
+    
+    window_spec = Window.partitionBy("customer_id").orderBy(F.desc("night_count"))
     df_home_cluster = (
-        df_home_period
+        df_night_appearance
         .withColumn("rank", F.row_number().over(window_spec))
         .filter(F.col("rank") == 1)
         .select("customer_id", F.col("cell_id").alias("home_cell_id"))
     )
     
     # Tính away days và multi-area days
-    df_daily_cdr_analysis = (
-        df_cdr_30d
+    df_daily_mobility = (
+        df_cdr_filtered
         .join(df_msisdn_mapping, "msisdn", "inner")
         .select("customer_id", "cell_id", "timestamp")
         .withColumn("date_stamp", F.to_date("timestamp"))
@@ -515,8 +552,8 @@ def calculate_presence_mobility_features(spark, snapshot_month, data_month):
         .withColumn("is_multi_area", F.when(F.col("unique_cells") >= 2, 1).otherwise(0))
     )
     
-    df_mobility_days = (
-        df_daily_cdr_analysis
+    df_mobility_result = (
+        df_daily_mobility
         .groupBy("customer_id")
         .agg(
             F.sum("daily_away").alias("away_days_from_cdr_30d"),
@@ -526,35 +563,42 @@ def calculate_presence_mobility_features(spark, snapshot_month, data_month):
     
     df_result = (
         df_customers
-        .join(df_absence_days, "customer_id", "left")
-        .join(df_mobility_days, "customer_id", "left")
+        .join(df_absence, "customer_id", "left")
+        .join(df_mobility_result, "customer_id", "left")
         .fillna(0)
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
     
+    # DEBUG: In distribution
+    print("📊 Mobility Features Distribution:")
+    df_result.select(
+        F.avg("home_absence_days_from_usage_30d").alias("avg_absence_days"),
+        F.avg("away_days_from_cdr_30d").alias("avg_away_days"),
+        F.avg("multi_area_mobility_days_30d").alias("avg_multi_area_days")
+    ).show()
+    
     return df_result
 
 def calculate_technical_support_features(spark, snapshot_month, data_month):
-    """NHÓM 6: HỖ TRỢ KỸ THUẬT"""
+    """NHÓM 6: HỖ TRỢ KỸ THUẬT - CHỈ 90 DAYS"""
     print("🔍 Calculating technical support features...")
-    
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_90d = F.date_sub(snapshot_date, 89)
-    start_date_180d = F.date_sub(snapshot_date, 179)
     
     df_customers = get_customer_base(spark, data_month)
     df_tickets = spark.table("silver.tickets_silver")
+    
+    # SỬA: Sử dụng date range thực tế - CHỈ 90 DAYS
+    date_range_90d, actual_days_90d = get_actual_date_range(data_month, 90)
     
     # 13. wifi_coverage_ticket_cnt_90d - với deduplication
     wifi_topics = ["wifi_coverage", "weak_signal", "router_position"]
     
     df_wifi_tickets_dedup = (
         df_tickets
-        .filter((F.col("create_time") >= start_date_90d) & (F.col("create_time") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_90d))
         .filter(F.lower(F.col("topic_group")).isin([t.lower() for t in wifi_topics]))
         .withColumn("date_trunc", F.date_trunc("day", "create_time"))
         .groupBy("customer_id", "date_trunc", "topic_group")
-        .agg(F.first("ticket_id").alias("ticket_id"))  # Deduplicate per day per topic
+        .agg(F.first("ticket_id").alias("ticket_id"))
     )
     
     df_wifi_tickets = (
@@ -563,15 +607,15 @@ def calculate_technical_support_features(spark, snapshot_month, data_month):
         .agg(F.count("ticket_id").alias("wifi_coverage_ticket_cnt_90d"))
     )
     
-    # 14. security_issue_ticket_cnt_180d
+    # 14. security_issue_ticket_cnt_90d
     security_topics = ["security_alarm", "motion_alert", "bell_issue", "camera_alarm"]
     
     df_security_tickets = (
         df_tickets
-        .filter((F.col("create_time") >= start_date_180d) & (F.col("create_time") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_90d))
         .filter(F.lower(F.col("topic_group")).isin([t.lower() for t in security_topics]))
         .groupBy("customer_id")
-        .agg(F.count("ticket_id").alias("security_issue_ticket_cnt_180d"))
+        .agg(F.count("ticket_id").alias("security_issue_ticket_cnt_90d"))
     )
     
     df_result = (
@@ -585,12 +629,8 @@ def calculate_technical_support_features(spark, snapshot_month, data_month):
     return df_result
 
 def calculate_business_features(spark, snapshot_month, data_month):
-    """NHÓM 7: KINH DOANH"""
+    """NHÓM 7: KINH DOANH - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating business features...")
-    
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_90d = F.date_sub(snapshot_date, 89)
-    start_date_180d = F.date_sub(snapshot_date, 179)
     
     df_customers = get_customer_base(spark, data_month)
     df_tickets = spark.table("silver.tickets_silver")
@@ -602,17 +642,17 @@ def calculate_business_features(spark, snapshot_month, data_month):
         .filter(F.col("is_current") == 1)
     df_usage = spark.table("silver.usage_silver")
     
-    # 15. retail_peak_usage_pattern_90d_flag
-    # Tính usage pattern cho retail (16-22h và cuối tuần)
-    start_date_py = datetime.strptime(data_month + '01', '%Y%m%d').date()
-    date_range_90d = [(start_date_py - timedelta(days=x)).strftime('%Y%m%d') for x in range(90, 0, -1)]
+    # SỬA: Sử dụng date range thực tế
+    date_range_90d, actual_days_90d = get_actual_date_range(data_month, 90)
+    date_range_30d, actual_days_30d = get_actual_date_range(data_month, 30)
     
+    # 15. retail_peak_usage_pattern_90d_flag
     df_usage_90d = (
         df_usage
         .filter(F.col("date").isin(date_range_90d))
         .withColumn("hour", F.hour("timestamp"))
         .withColumn("day_of_week", F.dayofweek("timestamp"))
-        .withColumn("is_weekend", F.when(F.col("day_of_week").isin([1, 7]), 1).otherwise(0))  # Sun=1, Sat=7
+        .withColumn("is_weekend", F.when(F.col("day_of_week").isin([1, 7]), 1).otherwise(0))
         .withColumn("is_peak_hour", F.when(F.col("hour").between(16, 22), 1).otherwise(0))
         .withColumn("total_bytes", F.col("uplink_bytes") + F.col("downlink_bytes"))
     )
@@ -633,22 +673,22 @@ def calculate_business_features(spark, snapshot_month, data_month):
         .agg(F.sum("total_bytes").alias("daily_peak_bytes"))
         .join(df_baseline, "customer_id", "left")
         .withColumn("peak_ratio", F.col("daily_peak_bytes") / F.col("avg_baseline_bytes"))
-        .withColumn("is_peak_day", F.when(F.col("peak_ratio") > 1.5, 1).otherwise(0))  # >50% increase
+        .withColumn("is_peak_day", F.when(F.col("peak_ratio") > 1.3, 1).otherwise(0))
         .groupBy("customer_id")
         .agg(F.avg("is_peak_day").alias("peak_day_ratio"))
         .withColumn("retail_peak_usage_pattern_90d_flag",
-                   F.when(F.col("peak_day_ratio") > 0.5, 1).otherwise(0))  # >50% days show peak pattern
+                   F.when(F.col("peak_day_ratio") > 0.3, 1).otherwise(0))
     )
     
-    # 16. pos_related_ticket_cnt_180d
+    # 16. pos_related_ticket_cnt_90d
     pos_topics = ["pos", "people_counting", "store_camera"]
     
     df_pos_tickets = (
         df_tickets
-        .filter((F.col("create_time") >= start_date_180d) & (F.col("create_time") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_90d))
         .filter(F.lower(F.col("topic_group")).isin([t.lower() for t in pos_topics]))
         .groupBy("customer_id")
-        .agg(F.count("ticket_id").alias("pos_related_ticket_cnt_180d"))
+        .agg(F.count("ticket_id").alias("pos_related_ticket_cnt_90d"))
     )
     
     # 17. multi_site_service_count
@@ -659,9 +699,6 @@ def calculate_business_features(spark, snapshot_month, data_month):
     )
     
     # 18. avg_daily_wifi_clients_30d
-    # Giả sử wifi_clients_count_daily là string chứa số lượng, cần parse
-    date_range_30d = [(start_date_py - timedelta(days=x)).strftime('%Y%m%d') for x in range(30, 0, -1)]
-    
     df_wifi_clients = (
         df_service_profile
         .filter(F.col("wifi_clients_count_daily").isNotNull())
@@ -684,11 +721,10 @@ def calculate_business_features(spark, snapshot_month, data_month):
     return df_result
 
 def calculate_time_sensitive_features(spark, snapshot_month, data_month):
-    """NHÓM 8: THỜI GIAN NHẠY CẢM"""
+    """NHÓM 8: THỜI GIAN NHẠY CẢM - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating time sensitive features...")
     
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_30d = F.date_sub(snapshot_date, 29)
+    snapshot_date = F.to_date(F.lit(data_month + '01'), 'yyyyMMdd')
     
     df_customers = spark.table("silver.crm_silver") \
         .filter(F.col("month") == data_month) \
@@ -700,6 +736,9 @@ def calculate_time_sensitive_features(spark, snapshot_month, data_month):
         .filter(F.col("is_current") == 1)
     
     df_tickets = spark.table("silver.tickets_silver")
+    
+    # SỬA: Sử dụng date range thực tế
+    date_range_30d, actual_days_30d = get_actual_date_range(data_month, 30)
     
     # 19. post_movein_period_flag
     df_recent_movers = (
@@ -715,7 +754,7 @@ def calculate_time_sensitive_features(spark, snapshot_month, data_month):
     # 20. neighbor_security_incident_flag
     df_recent_security_tickets = (
         df_tickets
-        .filter((F.col("create_time") >= start_date_30d) & (F.col("create_time") <= snapshot_date))
+        .filter(F.col("date").isin(date_range_30d))
         .filter(F.lower(F.col("topic_group")).isin(["security_issue", "theft", "intrusion"]))
         .join(df_customers.select("customer_id", "ward"), "customer_id", "inner")
         .groupBy("ward")
@@ -738,11 +777,10 @@ def calculate_time_sensitive_features(spark, snapshot_month, data_month):
     return df_result
 
 def calculate_demographic_features(spark, snapshot_month, data_month):
-    """NHÓM 9: NHÂN KHẨU HỌC"""
+    """NHÓM 9: NHÂN KHẨU HỌC - OPTIMIZED FOR ACTUAL DATA"""
     print("🔍 Calculating demographic features...")
     
-    snapshot_date = F.last_day(F.to_date(F.lit(data_month + '01'), 'yyyyMMdd'))
-    start_date_90d = F.date_sub(snapshot_date, 89)
+    snapshot_date = F.to_date(F.lit(data_month + '01'), 'yyyyMMdd')
     
     df_crm = spark.table("silver.crm_silver") \
         .filter(F.col("month") == data_month) \
@@ -757,7 +795,7 @@ def calculate_demographic_features(spark, snapshot_month, data_month):
         .distinct()
         .withColumn("has_children", 
                    F.when(F.col("household_member_age").isNotNull(),
-                         F.exists(F.col("household_member_age"), lambda x: x < 12))  # <12 tuổi theo spec
+                         F.exists(F.col("household_member_age"), lambda x: x < 12))
                     .otherwise(False))
         .withColumn("has_elderly",
                    F.when(F.col("household_member_age").isNotNull(),
@@ -769,8 +807,7 @@ def calculate_demographic_features(spark, snapshot_month, data_month):
                    F.when(F.col("has_elderly"), 1).otherwise(0))
         .withColumn("household_composition_change_90d_flag",
                    F.when((F.col("household_change_date").isNotNull()) &
-                          (F.col("household_change_date") >= start_date_90d) &
-                          (F.col("household_change_date") <= snapshot_date), 1)
+                          (F.datediff(snapshot_date, "household_change_date") <= 89), 1)
                     .otherwise(0))
         .select("customer_id",
                 "household_has_children_flag",
@@ -783,8 +820,9 @@ def calculate_demographic_features(spark, snapshot_month, data_month):
 
 def create_complete_feature_dataframe(spark, snapshot_month):
     """Tạo DataFrame hoàn chỉnh với tất cả 9 nhóm features"""
-    data_month = get_previous_month(snapshot_month)
+    data_month = snapshot_month
     print(f"🎯 Creating features for snapshot {snapshot_month} using data from {data_month}")
+    print(f"📊 Data available: SCD tables (month={data_month}), Fact tables (1/6 - 31/8)")
     
     # Tính toán tất cả 9 nhóm features
     df_direct_intent = calculate_direct_intent_features(spark, snapshot_month, data_month)
@@ -809,7 +847,6 @@ def create_complete_feature_dataframe(spark, snapshot_month):
         df_customers
         .withColumn("snapshot_month", F.lit(snapshot_month))
         .withColumn("month", F.lit(snapshot_month))
-        # Join từng nhóm features
         .join(df_direct_intent.select(
             "customer_id", 
             "camera_install_inquiry_30d_flag",
@@ -840,12 +877,12 @@ def create_complete_feature_dataframe(spark, snapshot_month):
         .join(df_technical_support.select(
             "customer_id",
             "wifi_coverage_ticket_cnt_90d",
-            "security_issue_ticket_cnt_180d"
+            "security_issue_ticket_cnt_90d"
         ), "customer_id", "left")
         .join(df_business.select(
             "customer_id",
             "retail_peak_usage_pattern_90d_flag",
-            "pos_related_ticket_cnt_180d",
+            "pos_related_ticket_cnt_90d",
             "multi_site_service_count",
             "avg_daily_wifi_clients_30d"
         ), "customer_id", "left")
@@ -872,6 +909,21 @@ def create_complete_feature_dataframe(spark, snapshot_month):
     print(f"✅ FINAL RESULT: {final_count} records for {distinct_count} customers")
     print(f"✅ ALL 9 FEATURE GROUPS COMPLETED for snapshot {snapshot_month}")
     
+    # DEBUG: In final feature distributions
+    print("🎯 FINAL FEATURE DISTRIBUTIONS:")
+    numeric_cols = [f.name for f in df_all_features.schema.fields 
+                   if isinstance(f.dataType, (IntegerType, DoubleType, LongType))
+                   and f.name not in ['customer_id', 'snapshot_month', 'month']]
+    
+    for col_name in numeric_cols[:10]:
+        stats = df_all_features.select(
+            F.mean(col_name).alias('mean'),
+            F.stddev(col_name).alias('stddev'),
+            F.min(col_name).alias('min'),
+            F.max(col_name).alias('max')
+        ).collect()[0]
+        print(f"  {col_name}: mean={stats['mean']:.3f}, std={stats['stddev']:.3f}, range=[{stats['min']}, {stats['max']}]")
+    
     return df_all_features
 
 def main():
@@ -881,6 +933,7 @@ def main():
     args = ap.parse_args()
 
     print(f"🚀 Starting Silver-to-Gold transformation for snapshot month: {args.month}")
+    print(f"📅 Using actual data: SCD tables (month={args.month}), Fact tables (1/6 - 31/8)")
     
     spark = get_spark("silver-to-gold")
     
@@ -900,7 +953,7 @@ def main():
          .write
          .mode("overwrite")
          .option("partitionOverwriteMode", "dynamic")
-         .saveAsTable("gold.customer_features_monthly"))
+         .insertInto("gold.customer_features_monthly"))
         
         print("✅ Silver-to-Gold transformation completed successfully!")
         
