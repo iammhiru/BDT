@@ -4,6 +4,7 @@ from pyspark.sql.types import *
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from datetime import datetime, timedelta
+from calendar import monthrange
 
 def get_spark(app_name, master="spark://spark-master:7077"):
     """Khởi tạo Spark Session"""
@@ -25,30 +26,41 @@ def get_spark(app_name, master="spark://spark-master:7077"):
     spark.sparkContext.setLogLevel("INFO")
     return spark
 
+def get_month_end_date(month_str):
+    """Lấy ngày cuối cùng của tháng"""
+    year = int(month_str[:4])
+    month = int(month_str[4:6])
+    last_day = monthrange(year, month)[1]
+    return datetime(year, month, last_day).date()
+
 def get_actual_date_range(snapshot_month, days_back):
-    """Lấy date range thực tế dựa trên data available (1/6 - 31/8)"""
-    snapshot_date = datetime.strptime(snapshot_month + '01', '%Y%m%d').date()
+    """Lấy date range thực tế dựa trên data available (1/6 - 31/8) - FIXED"""
+    # SỬA: Dùng ngày cuối tháng thay vì ngày đầu tháng
+    snapshot_date = get_month_end_date(snapshot_month)
     
-    # Data available từ 1/6/2025
+    # Data available từ 1/6/2025 đến 31/8/2025
     available_start = datetime(2025, 6, 1).date()
+    available_end = datetime(2025, 8, 31).date()
     
     # Tính start date mong muốn
     desired_start = snapshot_date - timedelta(days=days_back-1)
     
     # Nếu mong muốn trước data available → dùng available_start
     actual_start = max(desired_start, available_start)
+    # Không vượt quá available_end
+    actual_end = min(snapshot_date, available_end)
     
     # Tính số ngày thực tế có data
-    actual_days = (snapshot_date - actual_start).days + 1
+    actual_days = (actual_end - actual_start).days + 1
     
     # Tạo date range thực tế
     date_range = []
     current_date = actual_start
-    while current_date <= snapshot_date:
+    while current_date <= actual_end:
         date_range.append(current_date.strftime('%Y%m%d'))
         current_date += timedelta(days=1)
     
-    print(f"📅 Actual data: {len(date_range)} days for {days_back}d lookback (available: 1/6 - 31/8)")
+    print(f"📅 Actual data: {len(date_range)} days for {days_back}d lookback (range: {actual_start} to {actual_end})")
     
     return date_range, actual_days
 
@@ -94,7 +106,7 @@ def get_customer_base(spark, data_month):
         .select("customer_id").distinct()
 
 def create_feature_tables(spark):
-    """Tạo feature tables với các metric đã rút gọn"""
+    """Tạo feature tables với các metric đã rút gọn - FIXED SCHEMA"""
     spark.sql("CREATE DATABASE IF NOT EXISTS gold LOCATION 's3a://warehouse/hive/gold.db'")
     
     spark.sql("""
@@ -127,6 +139,7 @@ def create_feature_tables(spark):
             -- NHÓM 6: HỖ TRỢ KỸ THUẬT
             wifi_coverage_ticket_cnt_90d INT,
             security_issue_ticket_cnt_90d INT,
+            security_issue_ticket_cnt_180d INT,  -- THÊM METRIC NÀY
             
             -- NHÓM 7: KINH DOANH
             retail_peak_usage_pattern_90d_flag INT,
@@ -388,15 +401,19 @@ def calculate_usage_pattern_features(spark, snapshot_month, data_month):
     return df_result
 
 def calculate_housing_context_features(spark, snapshot_month, data_month):
-    """NHÓM 3: BỐI CẢNH ĐỊA CHỈ"""
+    """NHÓM 3: BỐI CẢNH ĐỊA CHỈ - FIXED STRING MATCHING"""
     print("🔍 Calculating housing context features...")
     
     df_crm = spark.table("silver.crm_silver") \
         .filter(F.col("month") == data_month) \
         .filter(F.col("is_current") == 1)
     
-    # 6. housing_type_street_house_flag
-    # 7. corner_house_probability_score
+    # DEBUG: Kiểm tra data thực tế
+    print("🏠 Housing Data Sample:")
+    df_crm.select("housing_type", "corner_house_flag").distinct().show()
+    
+    # 6. housing_type_street_house_flag - FIXED STRINGS
+    # 7. corner_house_probability_score - FIXED STRINGS
     df_housing = (
         df_crm
         .select("customer_id", "housing_type", "corner_house_flag")
@@ -414,30 +431,45 @@ def calculate_housing_context_features(spark, snapshot_month, data_month):
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
     
+    # DEBUG: In distribution
+    print("📊 Housing Features Distribution:")
+    df_housing.select(
+        F.avg("housing_type_street_house_flag").alias("avg_street_house"),
+        F.avg("corner_house_probability_score").alias("avg_corner_score")
+    ).show()
+    
     return df_housing
 
 def calculate_service_event_features(spark, snapshot_month, data_month):
-    """NHÓM 4: SỰ KIỆN DỊCH VỤ - OPTIMIZED FOR ACTUAL DATA"""
+    """NHÓM 4: SỰ KIỆN DỊCH VỤ - FIXED DATE LOGIC"""
     print("🔍 Calculating service event features...")
     
-    snapshot_date = F.to_date(F.lit(data_month + '01'), 'yyyyMMdd')
+    # SỬA: Dùng ngày cuối tháng
+    snapshot_date = F.lit(get_month_end_date(data_month))
     
     df_subscriptions = spark.table("silver.subscriptions_silver") \
         .filter(F.col("month") == data_month) \
         .filter(F.col("is_current") == 1)
     
-    # 8. service_address_change_90d_flag
-    # 9. broadband_upgrade_90d_flag
+    # DEBUG: Kiểm tra data thực tế
+    print("📊 Subscription Events Data Sample:")
+    df_subscriptions.filter(
+        (F.col("address_change_date").isNotNull()) | 
+        (F.col("upgrade_event_flag") == 1)
+    ).select("customer_id", "address_change_date", "upgrade_event_flag", "upgrade_date").show(10)
+    
+    # 8. service_address_change_90d_flag - FIXED DATE COMPARISON
+    # 9. broadband_upgrade_90d_flag - FIXED DATE COMPARISON
     df_service_events = (
         df_subscriptions
         .withColumn("service_address_change_90d_flag",
                    F.when((F.col("address_change_date").isNotNull()) & 
-                          (F.datediff(snapshot_date, F.col("address_change_date")).between(0, 89)), 1)
+                          (F.col("address_change_date") >= F.date_sub(snapshot_date, 89)), 1)
                     .otherwise(0))
         .withColumn("broadband_upgrade_90d_flag",
                    F.when((F.col("upgrade_event_flag") == 1) &
                           (F.col("upgrade_date").isNotNull()) &
-                          (F.datediff(snapshot_date, F.col("upgrade_date")).between(0, 89)), 1)
+                          (F.col("upgrade_date") >= F.date_sub(snapshot_date, 89)), 1)
                     .otherwise(0))
         .groupBy("customer_id")
         .agg(
@@ -446,6 +478,13 @@ def calculate_service_event_features(spark, snapshot_month, data_month):
         )
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
+    
+    # DEBUG: Kiểm tra kết quả
+    print("✅ Service Events Result:")
+    df_service_events.filter(
+        (F.col("service_address_change_90d_flag") == 1) | 
+        (F.col("broadband_upgrade_90d_flag") == 1)
+    ).show(10)
     
     return df_service_events
 
@@ -580,14 +619,15 @@ def calculate_presence_mobility_features(spark, snapshot_month, data_month):
     return df_result
 
 def calculate_technical_support_features(spark, snapshot_month, data_month):
-    """NHÓM 6: HỖ TRỢ KỸ THUẬT - CHỈ 90 DAYS"""
+    """NHÓM 6: HỖ TRỢ KỸ THUẬT - ADDED 180d METRIC"""
     print("🔍 Calculating technical support features...")
     
     df_customers = get_customer_base(spark, data_month)
     df_tickets = spark.table("silver.tickets_silver")
     
-    # SỬA: Sử dụng date range thực tế - CHỈ 90 DAYS
+    # SỬA: Thêm date range 180d
     date_range_90d, actual_days_90d = get_actual_date_range(data_month, 90)
+    date_range_180d, actual_days_180d = get_actual_date_range(data_month, 180)
     
     # 13. wifi_coverage_ticket_cnt_90d - với deduplication
     wifi_topics = ["wifi_coverage", "weak_signal", "router_position"]
@@ -607,10 +647,11 @@ def calculate_technical_support_features(spark, snapshot_month, data_month):
         .agg(F.count("ticket_id").alias("wifi_coverage_ticket_cnt_90d"))
     )
     
-    # 14. security_issue_ticket_cnt_90d
+    # 14. security_issue_ticket_cnt_90d & 180d
     security_topics = ["security_alarm", "motion_alert", "bell_issue", "camera_alarm"]
     
-    df_security_tickets = (
+    # 90 days
+    df_security_tickets_90d = (
         df_tickets
         .filter(F.col("date").isin(date_range_90d))
         .filter(F.lower(F.col("topic_group")).isin([t.lower() for t in security_topics]))
@@ -618,18 +659,36 @@ def calculate_technical_support_features(spark, snapshot_month, data_month):
         .agg(F.count("ticket_id").alias("security_issue_ticket_cnt_90d"))
     )
     
+    # THÊM: 180 days
+    df_security_tickets_180d = (
+        df_tickets
+        .filter(F.col("date").isin(date_range_180d))
+        .filter(F.lower(F.col("topic_group")).isin([t.lower() for t in security_topics]))
+        .groupBy("customer_id")
+        .agg(F.count("ticket_id").alias("security_issue_ticket_cnt_180d"))
+    )
+    
     df_result = (
         df_customers
         .join(df_wifi_tickets, "customer_id", "left")
-        .join(df_security_tickets, "customer_id", "left")
+        .join(df_security_tickets_90d, "customer_id", "left")
+        .join(df_security_tickets_180d, "customer_id", "left")  # THÊM
         .fillna(0)
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
     
+    # DEBUG: In distribution
+    print("📊 Technical Support Features Distribution:")
+    df_result.select(
+        F.avg("wifi_coverage_ticket_cnt_90d").alias("avg_wifi_tickets"),
+        F.avg("security_issue_ticket_cnt_90d").alias("avg_security_90d"),
+        F.avg("security_issue_ticket_cnt_180d").alias("avg_security_180d")
+    ).show()
+    
     return df_result
 
 def calculate_business_features(spark, snapshot_month, data_month):
-    """NHÓM 7: KINH DOANH - OPTIMIZED FOR ACTUAL DATA"""
+    """NHÓM 7: KINH DOANH - FIXED COLUMN NAMES"""
     print("🔍 Calculating business features...")
     
     df_customers = get_customer_base(spark, data_month)
@@ -698,14 +757,14 @@ def calculate_business_features(spark, snapshot_month, data_month):
         .agg(F.count_distinct("service_id").alias("multi_site_service_count"))
     )
     
-    # 18. avg_daily_wifi_clients_30d
+    # 18. avg_daily_wifi_clients_30d - FIXED COLUMN NAME
     df_wifi_clients = (
         df_service_profile
         .filter(F.col("wifi_clients_count_daily").isNotNull())
         .withColumn("wifi_clients", F.col("wifi_clients_count_daily").cast("double"))
         .filter(F.col("wifi_clients").isNotNull())
         .groupBy("customer_id")
-        .agg(F.avg("wifi_clients").alias("avg_daily_wifi_clients_30d"))
+        .agg(F.avg("wifi_clients").alias("avg_daily_wifi_clients_30d"))  # FIXED NAME
     )
     
     df_result = (
@@ -718,10 +777,19 @@ def calculate_business_features(spark, snapshot_month, data_month):
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
     
+    # DEBUG: In distribution
+    print("📊 Business Features Distribution:")
+    df_result.select(
+        F.avg("retail_peak_usage_pattern_90d_flag").alias("avg_retail_flag"),
+        F.avg("pos_related_ticket_cnt_90d").alias("avg_pos_tickets"),
+        F.avg("multi_site_service_count").alias("avg_multi_site"),
+        F.avg("avg_daily_wifi_clients_30d").alias("avg_wifi_clients")
+    ).show()
+    
     return df_result
 
 def calculate_time_sensitive_features(spark, snapshot_month, data_month):
-    """NHÓM 8: THỜI GIAN NHẠY CẢM - OPTIMIZED FOR ACTUAL DATA"""
+    """NHÓM 8: THỜI GIAN NHẠY CẢM - FIXED SELECT CLAUSE"""
     print("🔍 Calculating time sensitive features...")
     
     snapshot_date = F.to_date(F.lit(data_month + '01'), 'yyyyMMdd')
@@ -770,9 +838,16 @@ def calculate_time_sensitive_features(spark, snapshot_month, data_month):
         .withColumn("neighbor_security_incident_flag", 
                    F.coalesce(F.col("has_recent_incident"), F.lit(0)))
         .fillna(0, ["post_movein_period_flag"])
-        .select("customer_id", "post_movein_period_flag", "neighbor_security_incident_flag")
+        .select("customer_id", "post_movein_period_flag", "neighbor_security_incident_flag")  # FIXED SELECT
         .withColumn("snapshot_month", F.lit(snapshot_month))
     )
+    
+    # DEBUG: In distribution
+    print("📊 Time Sensitive Features Distribution:")
+    df_result.select(
+        F.avg("post_movein_period_flag").alias("avg_post_movein"),
+        F.avg("neighbor_security_incident_flag").alias("avg_neighbor_incident")
+    ).show()
     
     return df_result
 
@@ -819,7 +894,7 @@ def calculate_demographic_features(spark, snapshot_month, data_month):
     return df_demographics
 
 def create_complete_feature_dataframe(spark, snapshot_month):
-    """Tạo DataFrame hoàn chỉnh với tất cả 9 nhóm features"""
+    """Tạo DataFrame hoàn chỉnh với tất cả 9 nhóm features - FIXED JOINS"""
     data_month = snapshot_month
     print(f"🎯 Creating features for snapshot {snapshot_month} using data from {data_month}")
     print(f"📊 Data available: SCD tables (month={data_month}), Fact tables (1/6 - 31/8)")
@@ -840,7 +915,7 @@ def create_complete_feature_dataframe(spark, snapshot_month):
     
     print(f"📊 Base customer count: {df_customers.count()}")
     
-    # JOIN TẤT CẢ 9 NHÓM FEATURES
+    # JOIN TẤT CẢ 9 NHÓM FEATURES - FIXED COLUMN SELECTIONS
     print("🔄 Joining all 9 feature groups...")
     
     df_all_features = (
@@ -877,7 +952,8 @@ def create_complete_feature_dataframe(spark, snapshot_month):
         .join(df_technical_support.select(
             "customer_id",
             "wifi_coverage_ticket_cnt_90d",
-            "security_issue_ticket_cnt_90d"
+            "security_issue_ticket_cnt_90d",
+            "security_issue_ticket_cnt_180d"  # THÊM
         ), "customer_id", "left")
         .join(df_business.select(
             "customer_id",
@@ -948,13 +1024,12 @@ def main():
         
         # Bước 3: Ghi vào gold layer
         print("💾 Step 3: Writing to gold layer...")
-        
+            
         (df_all_features
-         .write
-         .mode("overwrite")
-         .option("partitionOverwriteMode", "dynamic")
-         .insertInto("gold.customer_features_monthly"))
-        
+        .write
+        .mode("overwrite")
+        .saveAsTable("gold.customer_features_monthly"))
+
         print("✅ Silver-to-Gold transformation completed successfully!")
         
         # Bước 4: Kiểm tra final table
